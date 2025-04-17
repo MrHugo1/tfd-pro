@@ -94,10 +94,31 @@ function getPathPosition(progress) {
 
 // Tower placement
 function canPlaceTower(x, y) {
-    // Cho phép đặt trụ toàn màn hình, chỉ kiểm tra không quá gần trụ khác
+    // Cho phép đặt trụ toàn màn hình (không giới hạn vùng)
+    
+    // Check if too close to path
+    for (let i = 0; i < config.path.length - 1; i++) {
+        const start = config.path[i];
+        const end = config.path[i + 1];
+        
+        // Calculate distance to line segment
+        const dx = end.x - start.x;
+        const dy = end.y - start.y;
+        const len = Math.sqrt(dx*dx + dy*dy);
+        
+        const dot = ((x - start.x) * dx + (y - start.y) * dy) / (len * len);
+        const closestX = start.x + dot * dx;
+        const closestY = start.y + dot * dy;
+        
+        const dist = distance(x, y, closestX, closestY);
+        if (dist < 40) return false;
+    }
+    
+    // Check if too close to other towers
     for (let tower of gameState.towers) {
         if (distance(x, y, tower.x, tower.y) < 40) return false;
     }
+    
     return true;
 }
 
@@ -134,55 +155,46 @@ function placeTower(x, y, towerId) {
     goldElement.textContent = gameState.gold;
 }
 
-const SPAWN_POINTS = Array.from({length: 10}, (_, i) => {
-    // 10 điểm x đều nhau trên đầu canvas (giả sử canvas.width = 360)
-    // Cách đều trong khoảng [30, 330] (để không sát mép)
-    return { x: 30 + i * (300 / 9), y: 0 };
-});
-
 // Spawn enemy with increasing health based on wave
 function spawnEnemy() {
     if (gameState.enemiesSpawned >= gameState.enemiesInWave || gameState.gameOver) return;
-
+    
     // Calculate stats based on wave (increasing health by 5% per wave)
     const waveMultiplier = 1 + ((gameState.currentWave - 1) * 0.05);
 
-    // Tốc độ quái: wave 1 đi hết màn hình 30s, mỗi wave sau giảm 2s, tối thiểu 5s
+    // Tính tốc độ quái dựa trên wave: wave 1 đi hết đường 30s, mỗi wave sau giảm 2s, tối thiểu 5s
+    const pathLen = getPathLength();
     const minTime = 5;
     const timeToFinish = Math.max(30 - (gameState.currentWave - 1) * 2, minTime);
-    const enemySpeed = (canvas.height / timeToFinish);
+    const enemySpeed = (pathLen / (timeToFinish * 10)) * 0.2; // tăng tốc độ lên x2 (so với 10%)
 
     // Random enemy type
     const enemyTypeIndex = Math.floor(Math.random() * config.enemyTypes.length);
     const enemyType = config.enemyTypes[enemyTypeIndex];
-
-    // Chọn 1 trong 10 điểm spawn
-    const spawnIdx = Math.floor(Math.random() * SPAWN_POINTS.length);
-    const spawnPoint = SPAWN_POINTS[spawnIdx];
-
+    
     const enemy = {
-        x: spawnPoint.x,
-        y: spawnPoint.y,
-        health: Math.floor(enemyType.health * waveMultiplier * 1.2),
-        maxHealth: Math.floor(enemyType.health * waveMultiplier * 1.2),
+        x: config.path[0].x,
+        y: config.path[0].y,
+        health: Math.floor(enemyType.health * waveMultiplier),
+        maxHealth: Math.floor(enemyType.health * waveMultiplier),
         speed: enemySpeed,
         reward: enemyType.reward,
         color: enemyType.color,
+        progress: 0,
         type: enemyType.name,
         attackRange: enemyType.attackRange,
         attackDamage: enemyType.attackDamage,
         attackCooldown: enemyType.attackCooldown,
         attackCooldownRemaining: 0,
-        isInCombat: false,
-        isStraightDown: true // đánh dấu enemy này đi thẳng xuống
+        isInCombat: false
     };
-
+    
     gameState.enemies.push(enemy);
     gameState.enemiesSpawned++;
-
+    
     // Update display
     enemiesElement.textContent = gameState.enemies.length + "/" + gameState.enemiesInWave;
-
+    
     // Schedule next enemy spawn
     if (gameState.enemiesSpawned < gameState.enemiesInWave) {
         setTimeout(spawnEnemy, config.enemySpawnRate);
@@ -253,6 +265,18 @@ function gameLoop(timestamp) {
     lastTimestamp = timestamp;
 
     if (gameState.isPlaying && !gameState.gameOver) {
+        // Update game timer
+        gameTimer += delta;
+        if (gameTimer >= 1) {
+            gameTimer = 0;
+            gameState.timeRemaining--;
+            timerElement.textContent = gameState.timeRemaining;
+            
+            if (gameState.timeRemaining <= 0) {
+                endGame(true); // Victory
+            }
+        }
+
         // Wave logic
         if (!gameState.waveInProgress) {
             waveTimer += delta * 1000;
@@ -265,12 +289,12 @@ function gameLoop(timestamp) {
             gameState.waveInProgress = false;
             gameState.currentWave++;
             waveTimer = 0;
-
+            
             // Bonus gold for completing wave
             const waveBonus = 50 + (gameState.currentWave * 10);
             gameState.gold += waveBonus;
             goldElement.textContent = gameState.gold;
-
+            
             // Show wave complete message
             const waveMessage = document.createElement('div');
             waveMessage.textContent = "Wave " + (gameState.currentWave - 1) + " hoàn thành! +" + waveBonus + " vàng";
@@ -284,20 +308,11 @@ function gameLoop(timestamp) {
             waveMessage.style.color = "white";
             waveMessage.style.zIndex = "100";
             document.getElementById('gameContainer').appendChild(waveMessage);
-
+            
             // Remove message after 2 seconds
             setTimeout(() => {
                 waveMessage.remove();
             }, 2000);
-
-            // Nếu đã qua 10 waves thì kiểm tra điều kiện thắng
-            if (gameState.currentWave > 10) {
-                if (gameState.enemiesLeaked < 10) {
-                    endGame(true); // Victory
-                } else {
-                    endGame(false); // Defeat
-                }
-            }
         }
 
         // Update barracks: accumulate units
@@ -438,37 +453,21 @@ function gameLoop(timestamp) {
         for (let i = gameState.enemies.length - 1; i >= 0; i--) {
             const enemy = gameState.enemies[i];
             if (!enemy.isInCombat) {
-                if (enemy.isStraightDown) {
-                    enemy.y += enemy.speed * delta;
-                } else {
-                    enemy.progress += (enemy.speed * delta) / 10;
-                    const position = getPathPosition(enemy.progress);
-                    enemy.x = position.x;
-                    enemy.y = position.y;
-                }
+                enemy.progress += (enemy.speed * delta) / 10;
+                const position = getPathPosition(enemy.progress);
+                enemy.x = position.x;
+                enemy.y = position.y;
             }
             // Check if enemy reached the end
-            if (enemy.isStraightDown) {
-                if (enemy.y > canvas.height) {
-                    gameState.enemies.splice(i, 1);
-                    gameState.enemiesLeaked++;
-                    // Update display
-                    enemiesElement.textContent = gameState.enemies.length + "/" + gameState.enemiesInWave;
-                    if (gameState.enemiesLeaked >= 10) {
-                        endGame(false); // Game over
-                    }
-                    continue;
-                }
-            } else {
-                if (enemy.progress >= 1) {
-                    gameState.enemies.splice(i, 1);
-                    gameState.enemiesLeaked++;
-                    // Update display
-                    enemiesElement.textContent = gameState.enemies.length + "/" + gameState.enemiesInWave;
-                    if (gameState.enemiesLeaked >= 10) {
-                        endGame(false); // Game over
-                    }
-                    continue;
+            if (enemy.progress >= 1) {
+                gameState.enemies.splice(i, 1);
+                gameState.enemiesLeaked++;
+                
+                // Update display
+                enemiesElement.textContent = gameState.enemies.length + "/" + gameState.enemiesInWave;
+                
+                if (gameState.enemiesLeaked >= 10) {
+                    endGame(false); // Game over
                 }
             }
             // Check if enemy died
@@ -554,10 +553,26 @@ function draw() {
     // Clear canvas
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     
-    // Không vẽ path nữa
-
-    // Không vẽ path border nữa
-
+    // Draw path
+    ctx.strokeStyle = '#8B4513';
+    ctx.lineWidth = 40;
+    ctx.beginPath();
+    ctx.moveTo(config.path[0].x, config.path[0].y);
+    for (let i = 1; i < config.path.length; i++) {
+        ctx.lineTo(config.path[i].x, config.path[i].y);
+    }
+    ctx.stroke();
+    
+    // Draw path border
+    ctx.strokeStyle = '#6e4223';
+    ctx.lineWidth = 42;
+    ctx.beginPath();
+    ctx.moveTo(config.path[0].x, config.path[0].y);
+    for (let i = 1; i < config.path.length; i++) {
+        ctx.lineTo(config.path[i].x, config.path[i].y);
+    }
+    ctx.stroke();
+    
     // Draw deployment zone line
     ctx.strokeStyle = 'rgba(255, 255, 255, 0.3)';
     ctx.lineWidth = 2;
@@ -725,6 +740,7 @@ function draw() {
 function startGame() {
     gameState.isPlaying = true;
     gameState.gold = config.initialGold;
+    gameState.timeRemaining = config.gameTime;
     gameState.towers = [];
     gameState.enemies = [];
     gameState.units = [];
@@ -734,12 +750,13 @@ function startGame() {
     gameState.currentWave = 1;
     gameState.waveInProgress = false;
     gameState.gameOver = false;
-
+    
     startButton.style.display = 'none';
+    timerElement.textContent = gameState.timeRemaining;
     goldElement.textContent = gameState.gold;
     waveElement.textContent = gameState.currentWave;
     enemiesElement.textContent = "0/" + gameState.enemiesInWave;
-
+    
     // Start first wave after a delay
     setTimeout(startWave, 2000);
 }
