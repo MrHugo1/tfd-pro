@@ -15,9 +15,9 @@ const tower4Button = document.getElementById('tower4');
 
 // Game configuration
 const config = {
-    gameTime: 120,
+    gameTime: 300,
     initialGold: 1000,
-    enemySpawnRate: 250, // ms between enemies in a wave
+    enemySpawnRate: 1000, // ms between enemies in a wave
     waveCooldown: 5000, // ms between waves
     initialEnemiesPerWave: 10,
     barracksUnitInterval: 6000, // ms, lính tích lũy mỗi 6s
@@ -63,6 +63,90 @@ const gameState = {
     gameOver: false
 };
 
+// Slow Spell Configuration
+const slowSpellConfig = {
+    buttonSize: 15,
+    buttonColor: '#e0e0e0',
+    buttonText: 'slow',
+    get buttonX() { return canvas.width - 10; },
+    get buttonY() { return canvas.height - 100; },
+    effectRadius: Math.round(125 * 0.7), // 70% của 125
+    slowEffect: 0.5,
+    duration: 3000, // 3s
+    cooldown: 10000, // 10s
+    hintOpacity: 0.3
+};
+const slowSpellState = {
+    isSelecting: false, // true khi đã click nút và chờ chọn vị trí
+    isOnCooldown: false,
+    cooldownRemaining: 0,
+    hintX: null,
+    hintY: null
+};
+
+// --- Stun Spell Configuration ---
+const stunSpellConfig = {
+    buttonSize: 15,
+    buttonColor: '#b0e0ff',
+    buttonText: 'stun',
+    get buttonX() { return canvas.width - 10; },
+    get buttonY() { return slowSpellConfig.buttonY - 30; }, // phía trên slow 30px
+    effectRadius: slowSpellConfig.effectRadius,
+    duration: 3000,
+    cooldown: 10000,
+    hintOpacity: 0.3
+};
+const stunSpellState = {
+    isSelecting: false,
+    isOnCooldown: false,
+    cooldownRemaining: 0,
+    hintX: null,
+    hintY: null
+};
+
+// --- Fire Spell Configuration ---
+const fireSpellConfig = {
+    buttonSize: 15,
+    buttonColor: '#ff9800',
+    buttonText: 'fire',
+    get buttonX() { return canvas.width - 10; },
+    get buttonY() { return stunSpellConfig.buttonY - 30; }, // phía trên stun 30px
+    effectRadius: slowSpellConfig.effectRadius,
+    damage: 50,
+    cooldown: 10000,
+    hintOpacity: 0.3
+};
+const fireSpellState = {
+    isSelecting: false,
+    isOnCooldown: false,
+    cooldownRemaining: 0,
+    hintX: null,
+    hintY: null
+};
+
+// --- Return Spell Configuration ---
+const returnSpellConfig = {
+    buttonSize: 15,
+    buttonColor: '#6c3483',
+    buttonText: 'return',
+    get buttonX() { return canvas.width - 10; },
+    get buttonY() { return fireSpellConfig.buttonY - 30; }, // phía trên fire 30px
+    effectRadius: slowSpellConfig.effectRadius,
+    duration: 3000,
+    cooldown: 10000,
+    hintOpacity: 0.3
+};
+const returnSpellState = {
+    isSelecting: false,
+    isOnCooldown: false,
+    cooldownRemaining: 0,
+    hintX: null,
+    hintY: null
+};
+
+// --- Version ---
+const GAME_VERSION = '1.2'; // Tăng lên 0.1 mỗi lần accepted
+
 // Helper functions
 function distance(x1, y1, x2, y2) {
     return Math.sqrt(Math.pow(x2 - x1, 2) + Math.pow(y2 - y1, 2));
@@ -95,44 +179,34 @@ function getPathPosition(progress) {
 // Tower placement
 function canPlaceTower(x, y) {
     // Cho phép đặt trụ toàn màn hình (không giới hạn vùng)
-    
     // Check if too close to path
     for (let i = 0; i < config.path.length - 1; i++) {
         const start = config.path[i];
         const end = config.path[i + 1];
-        
         // Calculate distance to line segment
         const dx = end.x - start.x;
         const dy = end.y - start.y;
         const len = Math.sqrt(dx*dx + dy*dy);
-        
         const dot = ((x - start.x) * dx + (y - start.y) * dy) / (len * len);
         const closestX = start.x + dot * dx;
         const closestY = start.y + dot * dy;
-        
         const dist = distance(x, y, closestX, closestY);
-        if (dist < 40) return false;
+        if (dist < 5) return false; // đổi từ 40 thành 5
     }
-    
     // Check if too close to other towers
     for (let tower of gameState.towers) {
-        if (distance(x, y, tower.x, tower.y) < 40) return false;
+        if (distance(x, y, tower.x, tower.y) < 10) return false; // đổi từ 40 thành 5
     }
-    
     return true;
 }
 
 function placeTower(x, y, towerId) {
     const towerType = config.towerTypes.find(t => t.id === towerId);
     if (!towerType) return;
-    
-    // Check if enough gold
+    if (gameState.towers.length >= 3) return;
+    if (gameState.towers.some(t => t.id === towerId)) return;
     if (gameState.gold < towerType.cost) return;
-    
-    // Check if valid position
     if (!canPlaceTower(x, y)) return;
-    
-    // Create tower
     const tower = {
         x: x,
         y: y,
@@ -145,14 +219,13 @@ function placeTower(x, y, towerId) {
         color: towerType.color,
         isBarracks: towerType.isBarracks || false,
         cost: towerType.cost,
-        // Barracks-specific
         accumulatedUnits: towerType.isBarracks ? 0 : undefined,
         barracksTimer: towerType.isBarracks ? 0 : undefined
     };
-    
     gameState.towers.push(tower);
     gameState.gold -= towerType.cost;
     goldElement.textContent = gameState.gold;
+    updateTowerButtons();
 }
 
 // Spawn enemy with increasing health based on wave
@@ -284,18 +357,18 @@ function gameLoop(timestamp) {
                 waveTimer = 0;
                 startWave();
             }
-        } else if (gameState.enemiesSpawned >= gameState.enemiesInWave && gameState.enemies.length === 0) {
-            // Wave completed
+        } else if (gameState.enemiesSpawned >= gameState.enemiesInWave) {
+            // Wave đã spawn đủ quái, bắt đầu đếm cooldown cho wave tiếp theo
             gameState.waveInProgress = false;
             gameState.currentWave++;
             waveTimer = 0;
             
-            // Bonus gold for completing wave
+            // Bonus gold cho hoàn thành wave (giữ nguyên logic cũ)
             const waveBonus = 50 + (gameState.currentWave * 10);
             gameState.gold += waveBonus;
             goldElement.textContent = gameState.gold;
             
-            // Show wave complete message
+            // Hiển thị thông báo hoàn thành wave (giữ nguyên logic cũ)
             const waveMessage = document.createElement('div');
             waveMessage.textContent = "Wave " + (gameState.currentWave - 1) + " hoàn thành! +" + waveBonus + " vàng";
             waveMessage.style.position = "absolute";
@@ -308,8 +381,6 @@ function gameLoop(timestamp) {
             waveMessage.style.color = "white";
             waveMessage.style.zIndex = "100";
             document.getElementById('gameContainer').appendChild(waveMessage);
-            
-            // Remove message after 2 seconds
             setTimeout(() => {
                 waveMessage.remove();
             }, 2000);
@@ -338,44 +409,121 @@ function gameLoop(timestamp) {
                 if (tower.cooldownRemaining > 0) {
                     tower.cooldownRemaining -= delta * 1000;
                 } else {
-                    // Find closest enemy in range
-                    let closestEnemy = null;
-                    let minDistance = tower.range;
-                    
-                    for (let enemy of gameState.enemies) {
-                        const dist = distance(tower.x, tower.y, enemy.x, enemy.y);
-                        if (dist < minDistance) {
-                            minDistance = dist;
-                            closestEnemy = enemy;
+                    // --- Trụ 75 vàng: bắn 2 mục tiêu gần nhất ---
+                    if (tower.id === 3) { // Ice tower
+                        // Tìm tối đa 2 quái gần nhất trong phạm vi
+                        let targets = gameState.enemies
+                            .map(enemy => ({ enemy, dist: distance(tower.x, tower.y, enemy.x, enemy.y) }))
+                            .filter(obj => obj.dist < tower.range)
+                            .sort((a, b) => a.dist - b.dist)
+                            .slice(0, 2)
+                            .map(obj => obj.enemy);
+                        if (targets.length > 0) {
+                            for (let target of targets) {
+                                target.health -= tower.damage;
+                                // Add projectile
+                                gameState.projectiles.push({
+                                    x: tower.x,
+                                    y: tower.y,
+                                    targetX: target.x,
+                                    targetY: target.y,
+                                    color: tower.color,
+                                    timeLeft: 0.2
+                                });
+                                // Check if enemy died
+                                if (target.health <= 0) {
+                                    const index = gameState.enemies.indexOf(target);
+                                    if (index > -1) {
+                                        gameState.enemies.splice(index, 1);
+                                        gameState.gold += target.reward;
+                                        goldElement.textContent = gameState.gold;
+                                        gameState.enemiesKilled++;
+                                        enemiesElement.textContent = gameState.enemies.length + "/" + gameState.enemiesInWave;
+                                    }
+                                }
+                            }
+                            tower.cooldownRemaining = tower.cooldown;
                         }
                     }
-                    
-                    if (closestEnemy) {
-                        // Attack enemy
-                        closestEnemy.health -= tower.damage;
-                        tower.cooldownRemaining = tower.cooldown;
-                        
-                        // Add projectile
-                        gameState.projectiles.push({
-                            x: tower.x,
-                            y: tower.y,
-                            targetX: closestEnemy.x,
-                            targetY: closestEnemy.y,
-                            color: tower.color,
-                            timeLeft: 0.2
-                        });
-                        
-                        // Check if enemy died
-                        if (closestEnemy.health <= 0) {
-                            const index = gameState.enemies.indexOf(closestEnemy);
-                            if (index > -1) {
-                                gameState.enemies.splice(index, 1);
-                                gameState.gold += closestEnemy.reward;
-                                goldElement.textContent = gameState.gold;
-                                gameState.enemiesKilled++;
-                                
-                                // Update display
-                                enemiesElement.textContent = gameState.enemies.length + "/" + gameState.enemiesInWave;
+                    // --- Trụ 100 vàng: bắn 3 lần, lần 4 x2 sát thương ---
+                    else if (tower.id === 2) { // Cannon tower
+                        if (!tower.shotCount) tower.shotCount = 0;
+                        // Tìm quái gần nhất trong phạm vi
+                        let closestEnemy = null;
+                        let minDistance = tower.range;
+                        for (let enemy of gameState.enemies) {
+                            const dist = distance(tower.x, tower.y, enemy.x, enemy.y);
+                            if (dist < minDistance) {
+                                minDistance = dist;
+                                closestEnemy = enemy;
+                            }
+                        }
+                        if (closestEnemy) {
+                            tower.shotCount++;
+                            let dmg = tower.damage;
+                            if (tower.shotCount === 4) {
+                                dmg = tower.damage * 2;
+                                tower.shotCount = 0;
+                            }
+                            closestEnemy.health -= dmg;
+                            tower.cooldownRemaining = tower.cooldown;
+                            // Add projectile
+                            gameState.projectiles.push({
+                                x: tower.x,
+                                y: tower.y,
+                                targetX: closestEnemy.x,
+                                targetY: closestEnemy.y,
+                                color: tower.color,
+                                timeLeft: 0.2
+                            });
+                            // Check if enemy died
+                            if (closestEnemy.health <= 0) {
+                                const index = gameState.enemies.indexOf(closestEnemy);
+                                if (index > -1) {
+                                    gameState.enemies.splice(index, 1);
+                                    gameState.gold += closestEnemy.reward;
+                                    goldElement.textContent = gameState.gold;
+                                    gameState.enemiesKilled++;
+                                    enemiesElement.textContent = gameState.enemies.length + "/" + gameState.enemiesInWave;
+                                }
+                            }
+                        }
+                    }
+                    // --- Các trụ khác giữ nguyên logic cũ ---
+                    else {
+                        // Find closest enemy in range
+                        let closestEnemy = null;
+                        let minDistance = tower.range;
+                        for (let enemy of gameState.enemies) {
+                            const dist = distance(tower.x, tower.y, enemy.x, enemy.y);
+                            if (dist < minDistance) {
+                                minDistance = dist;
+                                closestEnemy = enemy;
+                            }
+                        }
+                        if (closestEnemy) {
+                            // Attack enemy
+                            closestEnemy.health -= tower.damage;
+                            tower.cooldownRemaining = tower.cooldown;
+                            // Add projectile
+                            gameState.projectiles.push({
+                                x: tower.x,
+                                y: tower.y,
+                                targetX: closestEnemy.x,
+                                targetY: closestEnemy.y,
+                                color: tower.color,
+                                timeLeft: 0.2
+                            });
+                            // Check if enemy died
+                            if (closestEnemy.health <= 0) {
+                                const index = gameState.enemies.indexOf(closestEnemy);
+                                if (index > -1) {
+                                    gameState.enemies.splice(index, 1);
+                                    gameState.gold += closestEnemy.reward;
+                                    goldElement.textContent = gameState.gold;
+                                    gameState.enemiesKilled++;
+                                    enemiesElement.textContent = gameState.enemies.length + "/" + gameState.enemiesInWave;
+                                }
                             }
                         }
                     }
@@ -452,8 +600,19 @@ function gameLoop(timestamp) {
         // Update enemies (move if not in combat)
         for (let i = gameState.enemies.length - 1; i >= 0; i--) {
             const enemy = gameState.enemies[i];
+            // --- Chặn di chuyển/tấn công nếu bị stun ---
+            if (enemy.activeEffect && enemy.activeEffect.type === 'stun') {
+                continue;
+            }
+            // --- Nếu bị return, di chuyển ngược hướng với baseSpeed ---
+            let moveSpeed = enemy.speed;
+            if (enemy.activeEffect && enemy.activeEffect.type === 'return') {
+                moveSpeed = -enemy.speed;
+            } else if (enemy.activeEffect && enemy.activeEffect.type === 'slow') {
+                moveSpeed = enemy.speed * enemy.activeEffect.slowEffect;
+            }
             if (!enemy.isInCombat) {
-                enemy.progress += (enemy.speed * delta) / 10;
+                enemy.progress += (moveSpeed * delta) / 10;
                 const position = getPathPosition(enemy.progress);
                 enemy.x = position.x;
                 enemy.y = position.y;
@@ -539,6 +698,21 @@ function gameLoop(timestamp) {
                 gameState.projectiles.splice(i, 1);
             }
         }
+
+        // Update Slow Spell
+        updateSlowSpell(delta);
+
+        // Update Stun Spell
+        updateStunSpell(delta);
+
+        // Update Fire Spell
+        updateFireSpell(delta);
+
+        // Update Fire Hit Effects
+        updateFireHitEffects(delta);
+
+        // Update Return Spell
+        updateReturnSpell(delta);
     }
 
     // Draw everything
@@ -732,9 +906,281 @@ function draw() {
     ctx.fillStyle = 'white';
     ctx.font = '12px Arial';
     ctx.textAlign = 'left';
-    ctx.fillText('Tiêu diệt: ' + gameState.enemiesKilled, 10, 80);
+    ctx.fillText('Tiêu diệt: ' + gameState.enemiesKilled + '   v' + GAME_VERSION, 10, 80);
     ctx.fillText('Lọt qua: ' + gameState.enemiesLeaked + '/10', 10, 100);
+
+    // Draw Slow Spell Button
+    drawSlowSpellButton(ctx);
+    drawSlowSpellHint(ctx);
+    drawSlowEffectIndicators(ctx);
+
+    // Draw Stun Spell Button
+    drawStunSpellButton(ctx);
+    drawStunSpellHint(ctx);
+    drawStunEffectIndicators(ctx);
+
+    // Draw Fire Spell Button
+    drawFireSpellButton(ctx);
+    drawFireSpellHint(ctx);
+
+    // Draw Fire Hit Effects
+    for (const enemy of gameState.enemies) {
+        if (enemy.fireFlash && enemy.fireFlash > 0) {
+            ctx.save();
+            ctx.globalAlpha = Math.min(1, enemy.fireFlash * 3);
+            ctx.beginPath();
+            ctx.arc(enemy.x, enemy.y, 16, 0, Math.PI * 2);
+            ctx.fillStyle = 'rgba(255,255,180,0.7)';
+            ctx.fill();
+            ctx.restore();
+        }
+    }
+
+    // Draw Return Spell Button
+    drawReturnSpellButton(ctx);
+    drawReturnSpellHint(ctx);
 }
+
+// Draw Slow Spell Button
+function drawSlowSpellButton(ctx) {
+    ctx.save();
+    ctx.fillStyle = slowSpellState.isOnCooldown ? '#808080' : slowSpellConfig.buttonColor;
+    ctx.beginPath();
+    ctx.arc(slowSpellConfig.buttonX, slowSpellConfig.buttonY, slowSpellConfig.buttonSize, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#000';
+    ctx.font = '10px Arial';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(slowSpellConfig.buttonText, slowSpellConfig.buttonX, slowSpellConfig.buttonY);
+    if (slowSpellState.isOnCooldown) {
+        const percent = slowSpellState.cooldownRemaining / slowSpellConfig.cooldown;
+        ctx.fillStyle = 'rgba(0,0,0,0.3)';
+        ctx.beginPath();
+        ctx.moveTo(slowSpellConfig.buttonX, slowSpellConfig.buttonY);
+        ctx.arc(slowSpellConfig.buttonX, slowSpellConfig.buttonY, slowSpellConfig.buttonSize, -Math.PI/2, -Math.PI/2 + (1-percent)*Math.PI*2);
+        ctx.closePath();
+        ctx.fill();
+    }
+    ctx.restore();
+}
+
+// Draw Slow Spell Hint
+function drawSlowSpellHint(ctx) {
+    if (!slowSpellState.isSelecting || slowSpellState.hintX === null || slowSpellState.hintY === null) return;
+    ctx.save();
+    ctx.globalAlpha = slowSpellConfig.hintOpacity;
+    ctx.strokeStyle = '#aaa';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(slowSpellState.hintX, slowSpellState.hintY, slowSpellConfig.effectRadius, 0, Math.PI * 2);
+    ctx.stroke();
+    // Vòng tròn xoay
+    const rotation = (Date.now() % 1000) / 1000 * Math.PI * 2;
+    ctx.beginPath();
+    ctx.arc(slowSpellState.hintX, slowSpellState.hintY, slowSpellConfig.effectRadius, rotation, rotation + Math.PI * 1.5);
+    ctx.stroke();
+    ctx.restore();
+}
+
+// Draw Slow Effect Indicators
+function drawSlowEffectIndicators(ctx) {
+    for (const enemy of gameState.enemies) {
+        if (enemy.isSlowed) {
+            ctx.save();
+            ctx.fillStyle = 'rgba(255,255,0,0.9)';
+            ctx.font = 'bold 16px Arial';
+            ctx.textAlign = 'center';
+            ctx.fillText('!', enemy.x, enemy.y - 25);
+            ctx.restore();
+        }
+    }
+}
+
+// Update Slow Spell
+function updateSlowSpell(delta) {
+    // Cooldown
+    if (slowSpellState.isOnCooldown) {
+        slowSpellState.cooldownRemaining -= delta * 1000;
+        if (slowSpellState.cooldownRemaining <= 0) {
+            slowSpellState.isOnCooldown = false;
+            slowSpellState.cooldownRemaining = 0;
+        }
+    }
+    // Remove slow effect
+    const now = Date.now();
+    for (const enemy of gameState.enemies) {
+        if (enemy.isSlowed && enemy.slowEndTime && now > enemy.slowEndTime) {
+            enemy.speed = enemy.originalSpeed || enemy.speed;
+            enemy.isSlowed = false;
+        }
+    }
+}
+
+// Draw Stun Spell Button
+function drawStunSpellButton(ctx) {
+    ctx.save();
+    ctx.fillStyle = stunSpellState.isOnCooldown ? '#7fa6b8' : stunSpellConfig.buttonColor;
+    ctx.beginPath();
+    ctx.arc(stunSpellConfig.buttonX, stunSpellConfig.buttonY, stunSpellConfig.buttonSize, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#000';
+    ctx.font = '10px Arial';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(stunSpellConfig.buttonText, stunSpellConfig.buttonX, stunSpellConfig.buttonY);
+    if (stunSpellState.isOnCooldown) {
+        const percent = stunSpellState.cooldownRemaining / stunSpellConfig.cooldown;
+        ctx.fillStyle = 'rgba(0,0,0,0.3)';
+        ctx.beginPath();
+        ctx.moveTo(stunSpellConfig.buttonX, stunSpellConfig.buttonY);
+        ctx.arc(stunSpellConfig.buttonX, stunSpellConfig.buttonY, stunSpellConfig.buttonSize, -Math.PI/2, -Math.PI/2 + (1-percent)*Math.PI*2);
+        ctx.closePath();
+        ctx.fill();
+    }
+    ctx.restore();
+}
+
+// Draw Stun Spell Hint
+function drawStunSpellHint(ctx) {
+    if (!stunSpellState.isSelecting || stunSpellState.hintX === null || stunSpellState.hintY === null) return;
+    ctx.save();
+    ctx.globalAlpha = stunSpellConfig.hintOpacity;
+    ctx.strokeStyle = '#7fa6b8';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(stunSpellState.hintX, stunSpellState.hintY, stunSpellConfig.effectRadius, 0, Math.PI * 2);
+    ctx.stroke();
+    // Vòng tròn xoay
+    const rotation = (Date.now() % 1000) / 1000 * Math.PI * 2;
+    ctx.beginPath();
+    ctx.arc(stunSpellState.hintX, stunSpellState.hintY, stunSpellConfig.effectRadius, rotation, rotation + Math.PI * 1.5);
+    ctx.stroke();
+    ctx.restore();
+}
+
+// Draw Stun Effect Indicators
+function drawStunEffectIndicators(ctx) {
+    for (const enemy of gameState.enemies) {
+        if (enemy.activeEffect && enemy.activeEffect.type === 'stun') {
+            ctx.save();
+            ctx.fillStyle = 'rgba(0,200,255,0.9)';
+            ctx.font = 'bold 16px Arial';
+            ctx.textAlign = 'center';
+            ctx.fillText('Z', enemy.x, enemy.y - 25);
+            ctx.restore();
+        }
+    }
+}
+
+// Update Stun Spell
+function updateStunSpell(delta) {
+    if (stunSpellState.isOnCooldown) {
+        stunSpellState.cooldownRemaining -= delta * 1000;
+        if (stunSpellState.cooldownRemaining <= 0) {
+            stunSpellState.isOnCooldown = false;
+            stunSpellState.cooldownRemaining = 0;
+        }
+    }
+    // Remove stun effect nếu hết hạn
+    const now = Date.now();
+    for (const enemy of gameState.enemies) {
+        if (enemy.activeEffect && enemy.activeEffect.type === 'stun' && now > enemy.activeEffect.endTime) {
+            enemy.activeEffect = null;
+        }
+    }
+}
+
+// Handle Slow Spell Mouse Events
+canvas.addEventListener('mousedown', function(event) {
+    const rect = canvas.getBoundingClientRect();
+    const x = event.clientX - rect.left;
+    const y = event.clientY - rect.top;
+    // Nếu đang chọn vị trí, click lên canvas để kích hoạt spell
+    if (slowSpellState.isSelecting && !slowSpellState.isOnCooldown) {
+        // Không cho phép click lại vào nút
+        const distBtn = Math.sqrt((x - slowSpellConfig.buttonX) ** 2 + (y - slowSpellConfig.buttonY) ** 2);
+        if (distBtn > slowSpellConfig.buttonSize + 2) {
+            // Kích hoạt spell tại vị trí x, y
+            for (const enemy of gameState.enemies) {
+                const dist = Math.sqrt((enemy.x - x) ** 2 + (enemy.y - y) ** 2);
+                if (dist <= slowSpellConfig.effectRadius) {
+                    if (!enemy.isSlowed) {
+                        enemy.originalSpeed = enemy.speed;
+                        enemy.speed = enemy.speed * slowSpellConfig.slowEffect;
+                        enemy.isSlowed = true;
+                        enemy.slowEndTime = Date.now() + slowSpellConfig.duration;
+                    } else {
+                        enemy.slowEndTime = Date.now() + slowSpellConfig.duration;
+                    }
+                }
+            }
+            slowSpellState.isSelecting = false;
+            slowSpellState.isOnCooldown = true;
+            slowSpellState.cooldownRemaining = slowSpellConfig.cooldown;
+            slowSpellState.hintX = null;
+            slowSpellState.hintY = null;
+        }
+        return;
+    }
+    // Nếu click vào nút slow và không cooldown thì chuyển sang trạng thái chọn vị trí
+    const dist = Math.sqrt((x - slowSpellConfig.buttonX) ** 2 + (y - slowSpellConfig.buttonY) ** 2);
+    if (!slowSpellState.isOnCooldown && dist <= slowSpellConfig.buttonSize) {
+        slowSpellState.isSelecting = true;
+        slowSpellState.hintX = x;
+        slowSpellState.hintY = y;
+    }
+});
+
+canvas.addEventListener('mousemove', function(event) {
+    if (!slowSpellState.isSelecting) return;
+    const rect = canvas.getBoundingClientRect();
+    slowSpellState.hintX = event.clientX - rect.left;
+    slowSpellState.hintY = event.clientY - rect.top;
+});
+
+// --- Mouse events cho stunspell ---
+canvas.addEventListener('mousedown', function(event) {
+    const rect = canvas.getBoundingClientRect();
+    const x = event.clientX - rect.left;
+    const y = event.clientY - rect.top;
+    // Stun spell
+    if (stunSpellState.isSelecting && !stunSpellState.isOnCooldown) {
+        const distBtn = Math.sqrt((x - stunSpellConfig.buttonX) ** 2 + (y - stunSpellConfig.buttonY) ** 2);
+        if (distBtn > stunSpellConfig.buttonSize + 2) {
+            for (const enemy of gameState.enemies) {
+                const dist = Math.sqrt((enemy.x - x) ** 2 + (enemy.y - y) ** 2);
+                if (dist <= stunSpellConfig.effectRadius) {
+                    // Overwrite hiệu ứng cũ
+                    enemy.activeEffect = null;
+                    enemy.activeEffect = {
+                        type: 'stun',
+                        endTime: Date.now() + stunSpellConfig.duration
+                    };
+                }
+            }
+            stunSpellState.isSelecting = false;
+            stunSpellState.isOnCooldown = true;
+            stunSpellState.cooldownRemaining = stunSpellConfig.cooldown;
+            stunSpellState.hintX = null;
+            stunSpellState.hintY = null;
+        }
+        return;
+    }
+    if (!stunSpellState.isOnCooldown && Math.sqrt((x - stunSpellConfig.buttonX) ** 2 + (y - stunSpellConfig.buttonY) ** 2) <= stunSpellConfig.buttonSize) {
+        stunSpellState.isSelecting = true;
+        stunSpellState.hintX = x;
+        stunSpellState.hintY = y;
+        return;
+    }
+});
+canvas.addEventListener('mousemove', function(event) {
+    const rect = canvas.getBoundingClientRect();
+    if (stunSpellState.isSelecting) {
+        stunSpellState.hintX = event.clientX - rect.left;
+        stunSpellState.hintY = event.clientY - rect.top;
+    }
+});
 
 // Start game
 function startGame() {
@@ -756,8 +1202,7 @@ function startGame() {
     goldElement.textContent = gameState.gold;
     waveElement.textContent = gameState.currentWave;
     enemiesElement.textContent = "0/" + gameState.enemiesInWave;
-    
-    // Start first wave after a delay
+    updateTowerButtons();
     setTimeout(startWave, 2000);
 }
 
@@ -819,3 +1264,242 @@ canvas.addEventListener('click', function(event) {
 
 // Start game loop
 requestAnimationFrame(gameLoop);
+
+// --- Vô hiệu hóa button trụ đã xây ---
+function updateTowerButtons() {
+    for (let i = 1; i <= 4; i++) {
+        const btn = document.getElementById('tower' + i);
+        if (!btn) continue;
+        if (gameState.towers.some(t => t.id === i)) {
+            btn.disabled = true;
+            btn.style.opacity = 0.5;
+            btn.style.cursor = 'not-allowed';
+        } else {
+            btn.disabled = false;
+            btn.style.opacity = 1;
+            btn.style.cursor = 'pointer';
+        }
+    }
+}
+
+// Draw Fire Spell Button
+function drawFireSpellButton(ctx) {
+    ctx.save();
+    ctx.fillStyle = fireSpellState.isOnCooldown ? '#b26a00' : fireSpellConfig.buttonColor;
+    ctx.beginPath();
+    ctx.arc(fireSpellConfig.buttonX, fireSpellConfig.buttonY, fireSpellConfig.buttonSize, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#fff';
+    ctx.font = '10px Arial';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(fireSpellConfig.buttonText, fireSpellConfig.buttonX, fireSpellConfig.buttonY);
+    if (fireSpellState.isOnCooldown) {
+        const percent = fireSpellState.cooldownRemaining / fireSpellConfig.cooldown;
+        ctx.fillStyle = 'rgba(0,0,0,0.3)';
+        ctx.beginPath();
+        ctx.moveTo(fireSpellConfig.buttonX, fireSpellConfig.buttonY);
+        ctx.arc(fireSpellConfig.buttonX, fireSpellConfig.buttonY, fireSpellConfig.buttonSize, -Math.PI/2, -Math.PI/2 + (1-percent)*Math.PI*2);
+        ctx.closePath();
+        ctx.fill();
+    }
+    ctx.restore();
+}
+
+// Draw Fire Spell Hint
+function drawFireSpellHint(ctx) {
+    if (!fireSpellState.isSelecting || fireSpellState.hintX === null || fireSpellState.hintY === null) return;
+    ctx.save();
+    ctx.globalAlpha = fireSpellConfig.hintOpacity;
+    ctx.strokeStyle = '#ff9800';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(fireSpellState.hintX, fireSpellState.hintY, fireSpellConfig.effectRadius, 0, Math.PI * 2);
+    ctx.stroke();
+    // Vòng tròn xoay
+    const rotation = (Date.now() % 1000) / 1000 * Math.PI * 2;
+    ctx.beginPath();
+    ctx.arc(fireSpellState.hintX, fireSpellState.hintY, fireSpellConfig.effectRadius, rotation, rotation + Math.PI * 1.5);
+    ctx.stroke();
+    ctx.restore();
+}
+
+// Update Fire Spell
+function updateFireSpell(delta) {
+    if (fireSpellState.isOnCooldown) {
+        fireSpellState.cooldownRemaining -= delta * 1000;
+        if (fireSpellState.cooldownRemaining <= 0) {
+            fireSpellState.isOnCooldown = false;
+            fireSpellState.cooldownRemaining = 0;
+        }
+    }
+}
+
+// Update Fire Hit Effects
+function updateFireHitEffects(delta) {
+    for (const enemy of gameState.enemies) {
+        if (enemy.fireFlash && enemy.fireFlash > 0) {
+            enemy.fireFlash -= delta;
+            if (enemy.fireFlash < 0) enemy.fireFlash = 0;
+        }
+    }
+}
+
+// Handle Fire Spell Mouse Events
+canvas.addEventListener('mousedown', function(event) {
+    const rect = canvas.getBoundingClientRect();
+    const x = event.clientX - rect.left;
+    const y = event.clientY - rect.top;
+    // Fire spell
+    if (fireSpellState.isSelecting && !fireSpellState.isOnCooldown) {
+        const distBtn = Math.sqrt((x - fireSpellConfig.buttonX) ** 2 + (y - fireSpellConfig.buttonY) ** 2);
+        if (distBtn > fireSpellConfig.buttonSize + 2) {
+            for (const enemy of gameState.enemies) {
+                const dist = Math.sqrt((enemy.x - x) ** 2 + (enemy.y - y) ** 2);
+                if (dist <= fireSpellConfig.effectRadius) {
+                    enemy.health -= fireSpellConfig.damage;
+                    enemy.fireFlash = 0.3;
+                    if (enemy.health <= 0) {
+                        const index = gameState.enemies.indexOf(enemy);
+                        if (index > -1) {
+                            gameState.enemies.splice(index, 1);
+                            gameState.gold += enemy.reward;
+                            goldElement.textContent = gameState.gold;
+                            gameState.enemiesKilled++;
+                            enemiesElement.textContent = gameState.enemies.length + "/" + gameState.enemiesInWave;
+                        }
+                    }
+                }
+            }
+            fireSpellState.isSelecting = false;
+            fireSpellState.isOnCooldown = true;
+            fireSpellState.cooldownRemaining = fireSpellConfig.cooldown;
+            fireSpellState.hintX = null;
+            fireSpellState.hintY = null;
+        }
+        return;
+    }
+    if (!fireSpellState.isOnCooldown && Math.sqrt((x - fireSpellConfig.buttonX) ** 2 + (y - fireSpellConfig.buttonY) ** 2) <= fireSpellConfig.buttonSize) {
+        fireSpellState.isSelecting = true;
+        fireSpellState.hintX = x;
+        fireSpellState.hintY = y;
+        return;
+    }
+});
+
+canvas.addEventListener('mousemove', function(event) {
+    const rect = canvas.getBoundingClientRect();
+    if (fireSpellState.isSelecting) {
+        fireSpellState.hintX = event.clientX - rect.left;
+        fireSpellState.hintY = event.clientY - rect.top;
+    }
+});
+
+// Draw Return Spell Button
+function drawReturnSpellButton(ctx) {
+    ctx.save();
+    ctx.fillStyle = returnSpellState.isOnCooldown ? '#4a235a' : returnSpellConfig.buttonColor;
+    ctx.beginPath();
+    ctx.arc(returnSpellConfig.buttonX, returnSpellConfig.buttonY, returnSpellConfig.buttonSize, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#fff';
+    ctx.font = '10px Arial';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(returnSpellConfig.buttonText, returnSpellConfig.buttonX, returnSpellConfig.buttonY);
+    if (returnSpellState.isOnCooldown) {
+        const percent = returnSpellState.cooldownRemaining / returnSpellConfig.cooldown;
+        ctx.fillStyle = 'rgba(0,0,0,0.3)';
+        ctx.beginPath();
+        ctx.moveTo(returnSpellConfig.buttonX, returnSpellConfig.buttonY);
+        ctx.arc(returnSpellConfig.buttonX, returnSpellConfig.buttonY, returnSpellConfig.buttonSize, -Math.PI/2, -Math.PI/2 + (1-percent)*Math.PI*2);
+        ctx.closePath();
+        ctx.fill();
+    }
+    ctx.restore();
+}
+
+// Draw Return Spell Hint
+function drawReturnSpellHint(ctx) {
+    if (!returnSpellState.isSelecting || returnSpellState.hintX === null || returnSpellState.hintY === null) return;
+    ctx.save();
+    ctx.globalAlpha = returnSpellConfig.hintOpacity;
+    ctx.strokeStyle = '#6c3483';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(returnSpellState.hintX, returnSpellState.hintY, returnSpellConfig.effectRadius, 0, Math.PI * 2);
+    ctx.stroke();
+    // Vòng tròn xoay
+    const rotation = (Date.now() % 1000) / 1000 * Math.PI * 2;
+    ctx.beginPath();
+    ctx.arc(returnSpellState.hintX, returnSpellState.hintY, returnSpellConfig.effectRadius, rotation, rotation + Math.PI * 1.5);
+    ctx.stroke();
+    ctx.restore();
+}
+
+// Update Return Spell
+function updateReturnSpell(delta) {
+    if (returnSpellState.isOnCooldown) {
+        returnSpellState.cooldownRemaining -= delta * 1000;
+        if (returnSpellState.cooldownRemaining <= 0) {
+            returnSpellState.isOnCooldown = false;
+            returnSpellState.cooldownRemaining = 0;
+        }
+    }
+    // Remove return effect nếu hết hạn
+    const now = Date.now();
+    for (const enemy of gameState.enemies) {
+        if (enemy.activeEffect && enemy.activeEffect.type === 'return' && now > enemy.activeEffect.endTime) {
+            if (enemy.activeEffect.originalColor) {
+                enemy.color = enemy.activeEffect.originalColor;
+            }
+            enemy.activeEffect = null;
+        }
+    }
+}
+
+// --- Mouse events cho returnspell ---
+canvas.addEventListener('mousedown', function(event) {
+    const rect = canvas.getBoundingClientRect();
+    const x = event.clientX - rect.left;
+    const y = event.clientY - rect.top;
+    // Return spell
+    if (returnSpellState.isSelecting && !returnSpellState.isOnCooldown) {
+        const distBtn = Math.sqrt((x - returnSpellConfig.buttonX) ** 2 + (y - returnSpellConfig.buttonY) ** 2);
+        if (distBtn > returnSpellConfig.buttonSize + 2) {
+            for (const enemy of gameState.enemies) {
+                const dist = Math.sqrt((enemy.x - x) ** 2 + (enemy.y - y) ** 2);
+                if (dist <= returnSpellConfig.effectRadius) {
+                    // Overwrite hiệu ứng cũ
+                    enemy.activeEffect = null;
+                    enemy.activeEffect = {
+                        type: 'return',
+                        endTime: Date.now() + returnSpellConfig.duration,
+                        originalColor: enemy.color
+                    };
+                    enemy.color = '#111'; // chuyển sang màu đen
+                }
+            }
+            returnSpellState.isSelecting = false;
+            returnSpellState.isOnCooldown = true;
+            returnSpellState.cooldownRemaining = returnSpellConfig.cooldown;
+            returnSpellState.hintX = null;
+            returnSpellState.hintY = null;
+        }
+        return;
+    }
+    if (!returnSpellState.isOnCooldown && Math.sqrt((x - returnSpellConfig.buttonX) ** 2 + (y - returnSpellConfig.buttonY) ** 2) <= returnSpellConfig.buttonSize) {
+        returnSpellState.isSelecting = true;
+        returnSpellState.hintX = x;
+        returnSpellState.hintY = y;
+        return;
+    }
+});
+
+canvas.addEventListener('mousemove', function(event) {
+    const rect = canvas.getBoundingClientRect();
+    if (returnSpellState.isSelecting) {
+        returnSpellState.hintX = event.clientX - rect.left;
+        returnSpellState.hintY = event.clientY - rect.top;
+    }
+});
